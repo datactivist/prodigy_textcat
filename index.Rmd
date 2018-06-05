@@ -1,0 +1,261 @@
+---
+title: "Découvrir l'outil d'annotation Prodigy"
+subtitle: "L'annotation boostée à l'apprentissage actif"
+author: "Mathieu Morey, Datactivist"
+date: "31 mai 2018"
+output:
+  SlidesDatactivist::moon_reader:
+    css: [default, datactivist, datactivist-fonts]
+    lib_dir: libs
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+params:
+  event: Formation Prodigy
+  slug: prodigy
+---
+
+layout: true
+  
+
+`r paste0("<div class='my-footer'><span>", params$event, "</span> <center><div class=logo><img src='https://github.com/datactivist/slides_datactivist/raw/master/inst/rmarkdown/templates/xaringan/resources/img/fond_noir_monochrome.png' width='100px'></center></span></div>")` 
+
+---
+
+class: center, middle
+
+Ces slides en ligne : http://datactivist.coop/prodigy_textcat/
+
+Sources : https://github.com/datactivist/prodigy_textcat
+
+
+Les productions de Datactivist sont librement réutilisables selon les termes de la licence [Creative Commons 4.0 BY-SA](https://creativecommons.org/licenses/by-sa/4.0/legalcode.fr).
+
+<BR>
+<BR>
+
+![](./img/by-sa.svg)
+
+
+---
+## Pourquoi utiliser prodigy pour annoter des données?
+- Interface .red[**simple**]: l'annotation est rapide
+
+- Annotation .red[**focalisée**]: prodigy sélectionne les données qu'il vous propose d'annoter
+
+- Outil .red[**extensible**]: interface, types de données, types d'annotations, tâches
+
+- Exécution .red[**locale**]: les données restent en interne
+
+
+---
+## Workflow: catégorisation de textes
+
+1. Définir la tâche
+
+2. Amorcer une liste de termes pertinents
+
+3. Augmenter la liste de termes pertinents par annotation
+
+4. Annoter des messages
+
+5. Entraîner un modèle
+
+6. Utiliser un modèle (spacy)
+
+---
+## 2. Amorcer la liste de termes pertinents
+Compiler manuellement une liste de termes pertinents dans un fichier `.txt`, un terme par ligne:
+```{sh}
+head -n5 sport.txt
+```
+
+---
+## 3. Augmenter la liste de termes pertinents
+
+```sh
+# déclarer un jeu de données prodigy (base SQLite)
+prodigy dataset sport_terms "Termes liés au sport"
+# annoter des termes avec la recette terms.teach:
+# suggestion par similarité entre vecteurs de mots,
+# amorcée par la liste manuelle de termes
+prodigy terms.teach sport_terms fr_core_news_md --seeds sport.txt
+```
+
+- prodigy propose les termes les plus proches des termes pertinents, dans un espace de vecteurs de mots (ici vecteurs GloVe appris sur wikipedia)
+
+- décision: Oui / Non / ne se prononce pas
+
+---
+## 4. Annoter des messages
+```sh
+# générer des motifs pour la catégorie SPORT à partir des termes annotés
+prodigy terms.to-patterns sport_terms sport_patterns --label SPORT
+# créer un jeu de données de messages annotés SPORT
+# prodigy peut lire les messages sur l'entrée standard,
+# un par ligne, au format JSONL
+python tsv_loader.py | prodigy textcat.teach sport_msgs fr_core_news_md --label SPORT --patterns sport_patterns
+# pour arrêter d'annoter, on ferme le serveur: CTRL+C
+```
+
+`textcat.teach`: recette d'annotation active pour la tâche de catégorisation de texte
+
+score: "Uncertainty sampling"
+
+---
+## 4.bis Visualiser les annotations
+```sh
+prodigy textcat.print-dataset sport_msgs
+# ou les écrire au format JSONL sur la sortie standard
+prodigy db-out sport_msgs
+```
+
+---
+## 4.ter Vérifier la courbe d'entraînement d'un modèle
+
+Faut-il annoter plus de données?
+
+```sh
+prodigy textcat.train-curve sport_msgs fr_core_news_md
+```
+
+---
+## 5. Entraîner un modèle
+
+```sh
+prodigy textcat.batch-train -o sport_model sport_msgs fr_core_news_md
+```
+
+- séparation des données en ensembles d'entraînement et validation (training / evaluation)
+
+- prodigy stocke le modèle complet et les données (ensembles d'entraînement et de validation) (reproducibilité)
+
+---
+## 5.bis Annoter des messages en plusieurs sessions (1)
+Problèmes:
+
+- Quand on ferme une session, les annotations sont conservées mais .red[**pas le modèle**] appris au fil de la session d'annotation, utilisé pour sélectionner le prochain exemple à annoter.
+
+- Quand on démarre une nouvelle session, par défaut, toutes les données du flux d'entrée sont considérées: le modèle peut nous proposer de .red[**ré-annoter un message**] (ou un terme) .red[**déjà annoté**] dans une session précédente.
+
+---
+## 5.bis Annoter des messages en plusieurs sessions (2)
+Solution:
+```sh
+# avant de commencer une nouvelle session d'annotation:
+# entraîner un modèle sur les données déjà annotées, dérivé de fr_core_news_md,
+# stocké dans "sport-model"
+prodigy textcat.batch-train sport_msgs fr_core_news_md --output-model ./sport_model
+# lancer la nouvelle session d'annotation en utilisant le modèle "sport-model",
+# en excluant explicitement les données déjà annotées des données qui seront proposées
+prodigy textcat.teach sport_msgs ./sport_model --label SPORT --patterns sport_patterns --exclude sport_msgs
+```
+
+Bonus: la méthode `batch-train` fonctionnant "à froid" peut apprendre de meilleurs modèles que ceux qu'il est possible d'apprendre "à chaud" pendant l'annotation active.
+
+---
+## 6. Utiliser un modèle
+
+```python
+import spacy
+nlp = spacy.load("sport_model")
+doc = nlp("Benzema toujours pas sélectionné c abusé!!!!")
+print(doc.cats)
+```
+
+---
+## Exporter les annotations
+
+2 solutions:
+- export en ligne de commande:
+```sh
+prodigy db-out sport_msgs ./anno_sport_msgs
+# head -n1 anno_sport_msgs/sport_msgs.jsonl
+```
+
+- API python
+
+https://prodi.gy/docs/cookbook#db
+
+---
+## Annotation simple (sans active learning)
+
+Ecrire une recette sans "update"
+
+https://prodi.gy/docs/workflow-custom-recipes#example-choice
+
+https://support.prodi.gy/t/pattern-files-for-textcat-teach/408/10
+
+https://support.prodi.gy/t/how-do-i-use-prodigy-as-a-purely-annotation-tool-with-no-underlying-spacy-model/512/2
+
+
+---
+## Discussion: intérêt de l'active learning pour l'annotation?
+
+https://support.prodi.gy/t/active-learning-does-it-work/542/2
+
+https://lighttag.io/blog/active-learning-optimization-is-not-imporvement/
+
+---
+## Q1: Comment traiter de la vidéo? Ajouter un algo?
+
+- Créer un template HTML qui affiche une vidéo.
+
+- Créer une recette prodigy qui charge et affiche les vidéos, une par une, avec le template.
+
+
+---
+## Q2: Que deviennent nos modifications?
+
+- Vos ajouts et modifications (recettes, templates HTML, etc.) vous appartiennent.
+
+- Vous ne pouvez pas redistribuer, revendre ou licencier prodigy (original ou modifié) ni rendre prodigy accessible (serveur web public).
+
+- Vous pouvez donner un accès temporaire à un prestataire ou freelance (ex: annotateur) sur un serveur à accès protégé.
+
+
+---
+## Q3: Comment intégrer à notre archi R?
+
+Communication:
+
+- par fichiers et base de données SQLite
+
+- vraie interface R/Python (reticulate?)
+
+Remplacer des composants
+
+---
+## Q4: Solutions concurrentes?
+
+- (nouveau) https://lighttag.io : serveurs distants, 100$/utilisateur/mois
+
+- (ancien) brat: manque de support, développement stagnant, pas d'active learning
+
+- ...
+
+---
+## Q5: Quelle formule de pricing choisir?
+Paquet .red[**Company**]:
+
+- la licence est acquise par l'entreprise .red[**à vie**]
+
+- 5 licences .red[**flottantes**] utilisables par les employés
+
+- mises à jour du code de Prodigy gratuites pendant les 12 mois suivant l'achat
+  * v1.3.0 2018-02-01 --> v1.4.2 2018-04-10
+
+- installeur, application web, documentation
+
+- prix: $490 * 5 = 2450$ USD HT $= 2940$ USD TTC
+
+
+---
+class: inverse, center, middle
+
+# Merci !
+
+Contact : [mathieu@datactivist.coop](mailto:mathieu@datactivist.coop)
+
+
